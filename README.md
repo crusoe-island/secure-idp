@@ -2,6 +2,7 @@
 
 *A Three-Act Story of Survival, Security, and Infrastructure as Code*
 
+- [Directory Structure](./DIRECTORY_STRUCTURE.md)
 - [References](./REFERENCES.md)
 -----
 
