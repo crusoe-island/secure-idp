@@ -10,6 +10,12 @@ A production-ready Internal Developer Platform (IDP) built with **security-by-de
 
 **Inspired by:** The Robinson Crusoe story - building a secure, minimal, effective platform from first principles with limited resources and maximum focus.
 
+_____
+
+## 300 - Building Our Application
+
+See [README.md](./300/README.md)
+
 -----
 
 ## 📋 Table of Contents
