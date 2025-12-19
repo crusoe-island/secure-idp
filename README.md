@@ -2,6 +2,7 @@
 
 *A Three-Act Story of Survival, Security, and Infrastructure as Code*
 
+- [References](./REFERENCES.md)
 -----
 
 ## Act I: Shipwreck, Threat Modeling, and Zero Trust (Days 1-5)
