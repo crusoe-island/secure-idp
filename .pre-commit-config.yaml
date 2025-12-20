@@ -1,0 +1,555 @@
+# =============================================================================
+
+# Crusoe IDP - Pre-commit Configuration
+
+# Automated checks before every commit to maintain security and code quality
+
+# =============================================================================
+
+# 
+
+# Installation:
+
+# pip install pre-commit
+
+# pre-commit install
+
+# 
+
+# Usage:
+
+# pre-commit run –all-files  # Run on all files
+
+# pre-commit run <hook-id>    # Run specific hook
+
+# git commit                  # Hooks run automatically
+
+# 
+
+# =============================================================================
+
+repos:
+
+# ===========================================================================
+
+# GENERAL CODE QUALITY & SAFETY
+
+# ===========================================================================
+
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.5.0
+  hooks:
+  
+  # Prevent committing large files
+  - id: check-added-large-files
+    args: [’–maxkb=1000’]
+    description: Prevent large files from being committed
+  
+  # Check for files that would conflict in case-insensitive filesystems
+  - id: check-case-conflict
+    description: Check for files with names that differ only in case
+  
+  # Ensure files end with a newline
+  - id: end-of-file-fixer
+    description: Ensure files end with a newline
+    exclude: ‘.svg$’
+  
+  # Remove trailing whitespace
+  - id: trailing-whitespace
+    description: Remove trailing whitespace
+    args: [’–markdown-linebreak-ext=md’]
+  
+  # Check JSON syntax
+  - id: check-json
+    description: Validate JSON syntax
+  
+  # Check YAML syntax
+  - id: check-yaml
+    description: Validate YAML syntax
+    args: [’–unsafe’]  # Allow custom tags
+    exclude: ‘kubernetes/.*.yaml$’  # K8s might have special syntax
+  
+  # Check TOML syntax
+  - id: check-toml
+    description: Validate TOML syntax
+  
+  # Check XML syntax
+  - id: check-xml
+    description: Validate XML syntax
+  
+  # Check for merge conflicts
+  - id: check-merge-conflict
+    description: Check for merge conflict markers
+  
+  # Check for broken symlinks
+  - id: check-symlinks
+    description: Check for broken symbolic links
+  
+  # Detect private keys (CRITICAL for security)
+  - id: detect-private-key
+    description: Detect private keys in files
+  
+  # Prevent committing to protected branches
+  - id: no-commit-to-branch
+    description: Prevent commits to main/master
+    args: [’–branch’, ‘main’, ‘–branch’, ‘master’]
+  
+  # Fix mixed line endings
+  - id: mixed-line-ending
+    description: Ensure consistent line endings
+    args: [’–fix=lf’]
+  
+  # Check executables have shebangs
+  - id: check-executables-have-shebangs
+    description: Ensure executable scripts have shebangs
+  
+  # Check shebangs are executable
+  - id: check-shebang-scripts-are-executable
+    description: Ensure scripts with shebangs are executable
+
+# ===========================================================================
+
+# SECRETS DETECTION
+
+# ===========================================================================
+
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.4.0
+  hooks:
+  - id: detect-secrets
+    description: Detect secrets in code
+    args:
+    - ‘–baseline’
+    - ‘.secrets.baseline’
+    - ‘–exclude-files’
+    - ‘.git/.*’
+    - ‘–exclude-files’
+    - ‘.terraform/.*’
+    - ‘–exclude-files’
+    - ‘node_modules/.*’
+    - ‘–exclude-files’
+    - ‘.*.lock$’
+      exclude: |
+      (?x)(
+      package-lock.json|
+      yarn.lock|
+      Pipfile.lock|
+      poetry.lock|
+      .*.min.js|
+      .*.min.css
+      )
+
+# ===========================================================================
+
+# TERRAFORM SECURITY & QUALITY
+
+# ===========================================================================
+
+- repo: https://github.com/antonbabenko/pre-commit-terraform
+  rev: v1.83.5
+  hooks:
+  
+  # Format Terraform files
+  - id: terraform_fmt
+    description: Format Terraform files
+    args:
+    - ‘–args=-recursive’
+  
+  # Validate Terraform syntax
+  - id: terraform_validate
+    description: Validate Terraform configuration
+    exclude: ‘examples/.*’
+  
+  # Security scanning with tfsec
+  - id: terraform_tfsec
+    description: Scan Terraform for security issues
+    args:
+    - ‘–args=–concise-output’
+    - ‘–args=–force-all-dirs’
+    - ‘–args=–minimum-severity=HIGH’
+  
+  # Security scanning with Checkov
+  - id: terraform_checkov
+    description: Scan Terraform with Checkov
+    args:
+    - ‘–args=–quiet’
+    - ‘–args=–framework terraform’
+    - ‘–args=–skip-check CKV_AZURE_33’  # Example: skip specific checks if needed
+  
+  # Generate documentation
+  - id: terraform_docs
+    description: Generate Terraform documentation
+    args:
+    - ‘–args=–output-file=README.md’
+    - ‘–args=–output-mode=inject’
+  
+  # Check for Terraform version constraints
+  - id: terraform_providers_lock
+    description: Update Terraform provider locks
+    args:
+    - ‘–args=-platform=linux_amd64’
+    - ‘–args=-platform=darwin_amd64’
+    - ‘–args=-platform=darwin_arm64’
+  
+  # Validate terraform-docs markers
+  - id: terraform_docs_replace
+    description: Update Terraform docs
+    args:
+    - ‘–args=–output-file=README.md’
+    - ‘–args=–output-mode=replace’
+
+# ===========================================================================
+
+# PYTHON CODE QUALITY & SECURITY
+
+# ===========================================================================
+
+- repo: https://github.com/psf/black
+  rev: 23.11.0
+  hooks:
+  - id: black
+    description: Format Python code with Black
+    language_version: python3.11
+    args: [’–line-length=100’]
+- repo: https://github.com/PyCQA/isort
+  rev: 5.12.0
+  hooks:
+  - id: isort
+    description: Sort Python imports
+    args: [’–profile’, ‘black’, ‘–line-length’, ‘100’]
+- repo: https://github.com/PyCQA/flake8
+  rev: 6.1.0
+  hooks:
+  - id: flake8
+    description: Lint Python code with Flake8
+    args:
+    - ‘–max-line-length=100’
+    - ‘–extend-ignore=E203,W503’
+    - ‘–max-complexity=10’
+      additional_dependencies:
+    - flake8-bugbear
+    - flake8-comprehensions
+    - flake8-simplify
+- repo: https://github.com/PyCQA/bandit
+  rev: 1.7.5
+  hooks:
+  - id: bandit
+    description: Security linting for Python
+    args:
+    - ‘-c’
+    - ‘bandit.yaml’
+    - ‘-r’
+    - ‘.’
+      exclude: ‘tests/.*’
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.7.1
+  hooks:
+  - id: mypy
+    description: Static type checking for Python
+    additional_dependencies:
+    - types-requests
+    - types-PyYAML
+      args:
+    - ‘–ignore-missing-imports’
+    - ‘–strict-optional’
+- repo: https://github.com/pycqa/pydocstyle
+  rev: 6.3.0
+  hooks:
+  - id: pydocstyle
+    description: Check Python docstring conventions
+    args:
+    - ‘–convention=google’
+      exclude: ‘tests/.*’
+
+# ===========================================================================
+
+# JAVASCRIPT/TYPESCRIPT CODE QUALITY
+
+# ===========================================================================
+
+- repo: https://github.com/pre-commit/mirrors-eslint
+  rev: v8.54.0
+  hooks:
+  - id: eslint
+    description: Lint JavaScript/TypeScript
+    files: .(js|jsx|ts|tsx)$
+    types: [file]
+    args:
+    - ‘–fix’
+    - ‘–max-warnings=0’
+      additional_dependencies:
+    - ‘eslint@8.54.0’
+    - ‘eslint-config-airbnb@19.0.4’
+    - ‘@typescript-eslint/eslint-plugin@6.13.0’
+    - ‘@typescript-eslint/parser@6.13.0’
+- repo: https://github.com/pre-commit/mirrors-prettier
+  rev: v3.1.0
+  hooks:
+  - id: prettier
+    description: Format JavaScript/TypeScript/JSON/YAML
+    files: .(js|jsx|ts|tsx|json|yaml|yml|md)$
+    args:
+    - ‘–write’
+    - ‘–print-width=100’
+    - ‘–single-quote’
+    - ‘–trailing-comma=es5’
+
+# ===========================================================================
+
+# DOCKERFILE LINTING
+
+# ===========================================================================
+
+- repo: https://github.com/hadolint/hadolint
+  rev: v2.12.0
+  hooks:
+  - id: hadolint-docker
+    description: Lint Dockerfiles
+    args:
+    - ‘–ignore’
+    - ‘DL3008’  # Pin versions in apt-get (can be too strict)
+    - ‘–ignore’
+    - ‘DL3018’  # Pin versions in apk add (can be too strict)
+
+# ===========================================================================
+
+# SHELL SCRIPT LINTING
+
+# ===========================================================================
+
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.9.0.6
+  hooks:
+  - id: shellcheck
+    description: Lint shell scripts
+    args:
+    - ‘–severity=warning’
+    - ‘–exclude=SC1091’  # Not following sourced files
+
+# ===========================================================================
+
+# KUBERNETES MANIFESTS VALIDATION
+
+# ===========================================================================
+
+- repo: https://github.com/norwoodj/helm-docs
+  rev: v1.11.3
+  hooks:
+  - id: helm-docs
+    description: Generate Helm chart documentation
+    args:
+    - ‘–chart-search-root=kubernetes/charts’
+- repo: https://github.com/gruntwork-io/pre-commit
+  rev: v0.1.23
+  hooks:
+  - id: helmlint
+    description: Lint Helm charts
+    files: ‘kubernetes/charts/.*’
+
+# ===========================================================================
+
+# MARKDOWN LINTING
+
+# ===========================================================================
+
+- repo: https://github.com/igorshubovych/markdownlint-cli
+  rev: v0.37.0
+  hooks:
+  - id: markdownlint
+    description: Lint Markdown files
+    args:
+    - ‘–fix’
+    - ‘–disable’
+    - ‘MD013’  # Line length (too strict for code blocks)
+    - ‘–disable’
+    - ‘MD033’  # Allow inline HTML
+    - ‘–disable’
+    - ‘MD041’  # First line doesn’t have to be H1
+
+# ===========================================================================
+
+# SECURITY SCANNING - DEPENDENCIES
+
+# ===========================================================================
+
+- repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+  rev: v1.3.3
+  hooks:
+  - id: python-safety-dependencies-check
+    description: Check Python dependencies for vulnerabilities
+    files: ‘requirements.*.txt$’
+
+# ===========================================================================
+
+# GIT COMMIT MESSAGE VALIDATION
+
+# ===========================================================================
+
+- repo: https://github.com/jorisroovers/gitlint
+  rev: v0.19.1
+  hooks:
+  - id: gitlint
+    description: Lint git commit messages
+    stages: [commit-msg]
+    args:
+    - ‘–msg-filename’
+- repo: https://github.com/commitizen-tools/commitizen
+  rev: v3.13.0
+  hooks:
+  - id: commitizen
+    description: Check commit message format
+    stages: [commit-msg]
+
+# ===========================================================================
+
+# AZURE-SPECIFIC CHECKS
+
+# ===========================================================================
+
+- repo: local
+  hooks:
+  - id: azure-pipelines-validate
+    name: Validate Azure Pipelines YAML
+    description: Validate Azure DevOps pipeline syntax
+    entry: bash -c ‘for f in “$@”; do yamllint -d relaxed “$f”; done’
+    language: system
+    files: ‘azure-pipelines.*.ya?ml$’
+    pass_filenames: true
+  - id: check-terraform-naming
+    name: Check Terraform naming conventions
+    description: Ensure Terraform resources follow naming conventions
+    entry: python scripts/validation/check_terraform_naming.py
+    language: python
+    files: ‘.tf$’
+    pass_filenames: true
+  - id: check-sensitive-files
+    name: Check for sensitive files
+    description: Prevent committing sensitive configuration files
+    entry: python scripts/validation/check_sensitive_files.py
+    language: python
+    pass_filenames: true
+  - id: validate-kubernetes-manifests
+    name: Validate Kubernetes manifests
+    description: Validate K8s YAML with kubeval
+    entry: bash -c ‘for f in “$@”; do kubeval –strict “$f” || true; done’
+    language: system
+    files: ‘kubernetes/.*.ya?ml$’
+    pass_filenames: true
+    require_serial: true
+  - id: security-baseline-check
+    name: Security baseline validation
+    description: Ensure security baseline requirements are met
+    entry: python scripts/validation/security_baseline_check.py
+    language: python
+    pass_filenames: false
+    always_run: true
+
+# ===========================================================================
+
+# LICENSE COMPLIANCE
+
+# ===========================================================================
+
+- repo: https://github.com/Lucas-C/pre-commit-hooks
+  rev: v1.5.4
+  hooks:
+  - id: insert-license
+    name: Insert license header in Python files
+    description: Add license header to Python files
+    files: ‘.py$’
+    args:
+    - ‘–license-filepath’
+    - ‘LICENSE_HEADER.txt’
+    - ‘–comment-style’
+    - ‘#’
+  - id: insert-license
+    name: Insert license header in TypeScript files
+    description: Add license header to TypeScript files
+    files: ‘.(ts|tsx|js|jsx)$’
+    args:
+    - ‘–license-filepath’
+    - ‘LICENSE_HEADER.txt’
+    - ‘–comment-style’
+    - ‘//’
+
+# =============================================================================
+
+# CONFIGURATION
+
+# =============================================================================
+
+# Default language version
+
+default_language_version:
+python: python3.11
+node: ‘18.18.0’
+
+# Default stages for hooks
+
+default_stages: [commit]
+
+# Fail fast on first error
+
+fail_fast: false
+
+# Minimum pre-commit version
+
+minimum_pre_commit_version: ‘3.5.0’
+
+# =============================================================================
+
+# NOTES
+
+# =============================================================================
+
+# 
+
+# Hook Stages:
+
+# - commit: Runs on git commit (default)
+
+# - merge-commit: Runs on merge commits
+
+# - push: Runs on git push
+
+# - prepare-commit-msg: Runs when preparing commit message
+
+# - commit-msg: Runs to validate commit message
+
+# - post-checkout: Runs after git checkout
+
+# - post-commit: Runs after commit is created
+
+# - post-merge: Runs after merge
+
+# - manual: Only runs when explicitly called
+
+# 
+
+# Skip hooks:
+
+# SKIP=hook-id git commit
+
+# SKIP=hook-id,hook-id2 git commit
+
+# SKIP=all git commit  # Skip all hooks (use sparingly!)
+
+# 
+
+# Update hooks:
+
+# pre-commit autoupdate
+
+# 
+
+# Clean cache:
+
+# pre-commit clean
+
+# 
+
+# =============================================================================
+
+# END OF PRE-COMMIT CONFIGURATION
+
+# =============================================================================
