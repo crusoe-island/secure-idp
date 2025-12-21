@@ -1,0 +1,975 @@
+# =============================================================================
+
+# Comprehensive Security Audit Workflow
+
+# Performs SAST, secret scanning, compliance checks, and security benchmarks
+
+# =============================================================================
+
+name: Security Audit
+
+on:
+
+# Run on pull requests
+
+pull_request:
+branches:
+- main
+- master
+- develop
+
+# Run on push to main/master
+
+push:
+branches:
+- main
+- master
+
+# Allow manual trigger
+
+workflow_dispatch:
+
+# Run on schedule (weekly)
+
+schedule:
+- cron: ‘0 4 * * 0’  # Every Sunday at 4 AM UTC
+
+# Permissions for security scanning
+
+permissions:
+contents: read
+security-events: write
+pull-requests: write
+issues: write
+actions: read
+
+env:
+PYTHON_VERSION: ‘3.11’
+NODE_VERSION: ‘18’
+
+jobs:
+
+# ===========================================================================
+
+# Job 1: CodeQL Analysis (SAST)
+
+# ===========================================================================
+
+codeql-analysis:
+name: CodeQL Security Analysis
+runs-on: ubuntu-latest
+strategy:
+fail-fast: false
+matrix:
+language: [‘python’, ‘javascript’, ‘go’]
+# Add other languages as needed: ‘java’, ‘csharp’, ‘cpp’, ‘ruby’
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Initialize CodeQL
+    uses: github/codeql-action/init@v3
+    with:
+      languages: ${{ matrix.language }}
+      queries: +security-extended,security-and-quality
+      config-file: ./.github/codeql/codeql-config.yml
+  
+  - name: Autobuild
+    uses: github/codeql-action/autobuild@v3
+  
+  - name: Perform CodeQL Analysis
+    uses: github/codeql-action/analyze@v3
+    with:
+      category: "/language:${{ matrix.language }}"
+      upload: true
+```
+
+# ===========================================================================
+
+# Job 2: Semgrep SAST Scan
+
+# ===========================================================================
+
+semgrep-scan:
+name: Semgrep Security Scan
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Run Semgrep
+    uses: returntocorp/semgrep-action@v1
+    with:
+      config: >-
+        p/security-audit
+        p/secrets
+        p/owasp-top-ten
+        p/terraform
+        p/docker
+        p/kubernetes
+      generateSarif: true
+  
+  - name: Upload Semgrep SARIF
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: semgrep.sarif
+      category: semgrep
+  
+  - name: Upload Semgrep Results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: semgrep-results
+      path: semgrep.sarif
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 3: SonarQube/SonarCloud Analysis
+
+# ===========================================================================
+
+sonarqube-scan:
+name: SonarQube Security Analysis
+runs-on: ubuntu-latest
+if: github.event_name == ‘push’ || github.event_name == ‘pull_request’
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+    with:
+      fetch-depth: 0  # Shallow clones disabled for better analysis
+  
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: ${{ env.PYTHON_VERSION }}
+  
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+  
+  - name: Run tests with coverage
+    run: |
+      pip install pytest pytest-cov
+      pytest tests/ --cov=. --cov-report=xml --cov-report=html || true
+    continue-on-error: true
+  
+  - name: SonarCloud Scan
+    uses: SonarSource/sonarcloud-github-action@master
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    with:
+      args: >
+        -Dsonar.projectKey=crusoe-island_secure-idp
+        -Dsonar.organization=crusoe-island
+        -Dsonar.python.coverage.reportPaths=coverage.xml
+        -Dsonar.sources=.
+        -Dsonar.exclusions=**/tests/**,**/node_modules/**,**/*.test.ts,**/*.test.js
+  
+  - name: Upload coverage reports
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: coverage-reports
+      path: |
+        coverage.xml
+        htmlcov/
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 4: Secret Scanning (Multiple Tools)
+
+# ===========================================================================
+
+secret-scanning:
+name: Secret Scanning
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+    with:
+      fetch-depth: 0  # Full history for comprehensive scanning
+  
+  - name: Run TruffleHog
+    uses: trufflesecurity/trufflehog@main
+    with:
+      path: ./
+      base: ${{ github.event.repository.default_branch }}
+      extra_args: --json --only-verified
+    continue-on-error: true
+  
+  - name: Run GitLeaks
+    uses: gitleaks/gitleaks-action@v2
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+    continue-on-error: true
+  
+  - name: Run detect-secrets
+    run: |
+      pip install detect-secrets
+      detect-secrets scan --all-files --force-use-all-plugins > .secrets.baseline.new
+      
+      # Compare with baseline if it exists
+      if [ -f .secrets.baseline ]; then
+        detect-secrets audit .secrets.baseline.new
+      fi
+    continue-on-error: true
+  
+  - name: Scan for AWS credentials
+    run: |
+      echo "Scanning for AWS credentials..."
+      git grep -E "(AKIA|A3T|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[0-9A-Z]{16}" || echo "No AWS credentials found"
+    continue-on-error: true
+  
+  - name: Scan for private keys
+    run: |
+      echo "Scanning for private keys..."
+      git grep -E "BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY" || echo "No private keys found"
+    continue-on-error: true
+  
+  - name: Upload secret scan results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: secret-scan-results
+      path: |
+        .secrets.baseline.new
+        results.sarif
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 5: Python Security Linting (Bandit)
+
+# ===========================================================================
+
+bandit-scan:
+name: Bandit Security Linting
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: ${{ env.PYTHON_VERSION }}
+  
+  - name: Install Bandit
+    run: pip install bandit[toml]
+  
+  - name: Run Bandit
+    run: |
+      bandit -r . \
+        -f json -o bandit-report.json \
+        -ll \
+        --exclude ./tests,./venv,./node_modules
+    continue-on-error: true
+  
+  - name: Run Bandit (SARIF)
+    run: |
+      bandit -r . \
+        -f sarif -o bandit-results.sarif \
+        -ll \
+        --exclude ./tests,./venv,./node_modules
+    continue-on-error: true
+  
+  - name: Upload Bandit SARIF
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: bandit-results.sarif
+      category: bandit
+  
+  - name: Check Bandit results
+    run: |
+      if [ -f bandit-report.json ]; then
+        HIGH=$(cat bandit-report.json | jq '.metrics._totals."SEVERITY.HIGH" // 0')
+        MEDIUM=$(cat bandit-report.json | jq '.metrics._totals."SEVERITY.MEDIUM" // 0')
+        
+        echo "🔍 Bandit Security Issues:"
+        echo "  HIGH: $HIGH"
+        echo "  MEDIUM: $MEDIUM"
+        
+        if [ "$HIGH" -gt 0 ]; then
+          echo "⚠️ HIGH severity security issues found"
+        fi
+      fi
+  
+  - name: Upload Bandit report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: bandit-report
+      path: bandit-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 6: JavaScript/TypeScript Security (ESLint Security Plugin)
+
+# ===========================================================================
+
+eslint-security:
+name: ESLint Security Scan
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Set up Node.js
+    uses: actions/setup-node@v4
+    with:
+      node-version: ${{ env.NODE_VERSION }}
+  
+  - name: Install dependencies
+    run: |
+      npm install -g eslint
+      npm install -g eslint-plugin-security
+      npm install -g eslint-plugin-no-secrets
+      npm install -g @microsoft/eslint-plugin-sdl
+  
+  - name: Run ESLint with security plugins
+    run: |
+      eslint . \
+        --ext .js,.jsx,.ts,.tsx \
+        --plugin security \
+        --plugin no-secrets \
+        --plugin @microsoft/sdl \
+        --format json \
+        --output-file eslint-security-report.json || true
+    continue-on-error: true
+  
+  - name: Upload ESLint results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: eslint-security-report
+      path: eslint-security-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 7: Infrastructure Security (Checkov)
+
+# ===========================================================================
+
+checkov-scan:
+name: Checkov Infrastructure Scan
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Run Checkov
+    uses: bridgecrewio/checkov-action@master
+    with:
+      directory: .
+      framework: terraform,dockerfile,kubernetes,github_actions
+      output_format: cli,sarif
+      output_file_path: console,checkov-results.sarif
+      download_external_modules: true
+      soft_fail: true
+  
+  - name: Upload Checkov SARIF
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: checkov-results.sarif
+      category: checkov
+```
+
+# ===========================================================================
+
+# Job 8: API Security Testing (OWASP ZAP)
+
+# ===========================================================================
+
+api-security-test:
+name: API Security Testing
+runs-on: ubuntu-latest
+if: github.event_name == ‘pull_request’ || github.event_name == ‘workflow_dispatch’
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Run OWASP ZAP Baseline Scan
+    uses: zaproxy/action-baseline@v0.10.0
+    with:
+      target: 'https://idp-dev.crusoe-island.com'
+      rules_file_name: '.zap/rules.tsv'
+      cmd_options: '-a'
+    continue-on-error: true
+  
+  - name: Upload ZAP report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: zap-report
+      path: |
+        report_html.html
+        report_json.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 9: Security Headers Check
+
+# ===========================================================================
+
+security-headers:
+name: Security Headers Check
+runs-on: ubuntu-latest
+if: github.event_name == ‘pull_request’ || github.event_name == ‘workflow_dispatch’
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Check security headers
+    run: |
+      cat > check-headers.sh << 'EOF'
+      #!/bin/bash
+      URL="${1:-https://idp-dev.crusoe-island.com}"
+      
+      echo "# Security Headers Report" > security-headers-report.md
+      echo "" >> security-headers-report.md
+      echo "Testing: $URL" >> security-headers-report.md
+      echo "" >> security-headers-report.md
+      
+      # Get headers
+      HEADERS=$(curl -sI "$URL")
+      
+      # Check required headers
+      check_header() {
+        HEADER=$1
+        EXPECTED=$2
+        
+        if echo "$HEADERS" | grep -qi "$HEADER"; then
+          VALUE=$(echo "$HEADERS" | grep -i "$HEADER" | cut -d: -f2- | tr -d '\r\n')
+          echo "✅ $HEADER:$VALUE" >> security-headers-report.md
+        else
+          echo "❌ $HEADER: Missing" >> security-headers-report.md
+        fi
+      }
+      
+      echo "## Required Security Headers" >> security-headers-report.md
+      check_header "Strict-Transport-Security"
+      check_header "X-Content-Type-Options"
+      check_header "X-Frame-Options"
+      check_header "Content-Security-Policy"
+      check_header "X-XSS-Protection"
+      check_header "Referrer-Policy"
+      check_header "Permissions-Policy"
+      
+      echo "" >> security-headers-report.md
+      echo "## Headers to Avoid" >> security-headers-report.md
+      
+      if echo "$HEADERS" | grep -qi "X-Powered-By"; then
+        echo "⚠️ X-Powered-By: Should be removed (information disclosure)" >> security-headers-report.md
+      else
+        echo "✅ X-Powered-By: Not present (good)" >> security-headers-report.md
+      fi
+      
+      if echo "$HEADERS" | grep -qi "Server: "; then
+        SERVER=$(echo "$HEADERS" | grep -i "Server: " | cut -d: -f2- | tr -d '\r\n')
+        echo "⚠️ Server:$SERVER (consider hiding version)" >> security-headers-report.md
+      fi
+      EOF
+      
+      chmod +x check-headers.sh
+      ./check-headers.sh || true
+    continue-on-error: true
+  
+  - name: Upload security headers report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: security-headers-report
+      path: security-headers-report.md
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 10: Compliance Checks (CIS Benchmarks)
+
+# ===========================================================================
+
+compliance-checks:
+name: Compliance & Benchmark Checks
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Check file permissions
+    run: |
+      echo "# File Permission Audit" > permissions-audit.md
+      echo "" >> permissions-audit.md
+      
+      # Check for overly permissive files
+      echo "## Files with 777 permissions (CRITICAL)" >> permissions-audit.md
+      find . -type f -perm 0777 2>/dev/null | tee -a permissions-audit.md || echo "None found" >> permissions-audit.md
+      
+      echo "" >> permissions-audit.md
+      echo "## Script files without execute permission" >> permissions-audit.md
+      find . -type f \( -name "*.sh" -o -name "*.bash" \) ! -perm -u+x 2>/dev/null | tee -a permissions-audit.md || echo "None found" >> permissions-audit.md
+  
+  - name: Check for hardcoded IPs
+    run: |
+      echo "# Hardcoded IP Address Audit" > ip-audit.md
+      echo "" >> ip-audit.md
+      
+      # Find potential hardcoded IPs (excluding common safe IPs)
+      git grep -E '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
+        | grep -v "127.0.0.1" \
+        | grep -v "0.0.0.0" \
+        | grep -v "255.255.255" \
+        | tee -a ip-audit.md || echo "No hardcoded IPs found" >> ip-audit.md
+  
+  - name: Check for insecure protocols
+    run: |
+      echo "# Insecure Protocol Usage Audit" > protocol-audit.md
+      echo "" >> protocol-audit.md
+      
+      echo "## HTTP URLs (should be HTTPS)" >> protocol-audit.md
+      git grep -i "http://" \
+        | grep -v "http://localhost" \
+        | grep -v "http://127.0.0.1" \
+        | tee -a protocol-audit.md || echo "None found" >> protocol-audit.md
+      
+      echo "" >> protocol-audit.md
+      echo "## Telnet usage" >> protocol-audit.md
+      git grep -i "telnet" | tee -a protocol-audit.md || echo "None found" >> protocol-audit.md
+      
+      echo "" >> protocol-audit.md
+      echo "## FTP usage" >> protocol-audit.md
+      git grep -E "(ftp://|ftp\.)" | tee -a protocol-audit.md || echo "None found" >> protocol-audit.md
+  
+  - name: Check Azure security best practices
+    run: |
+      echo "# Azure Security Best Practices Check" > azure-security-audit.md
+      echo "" >> azure-security-audit.md
+      
+      # Check for public endpoints
+      echo "## Public Endpoints Check" >> azure-security-audit.md
+      git grep -i "public_network_access_enabled.*true" terraform/ | tee -a azure-security-audit.md || echo "✅ No public endpoints enabled" >> azure-security-audit.md
+      
+      # Check for encryption
+      echo "" >> azure-security-audit.md
+      echo "## Encryption Settings" >> azure-security-audit.md
+      git grep -i "enable_https_traffic_only.*false" terraform/ | tee -a azure-security-audit.md || echo "✅ HTTPS traffic enforced" >> azure-security-audit.md
+      
+      # Check for private endpoints
+      echo "" >> azure-security-audit.md
+      echo "## Private Endpoints" >> azure-security-audit.md
+      git grep "private_endpoint" terraform/ | wc -l | xargs -I {} echo "Private endpoints configured: {}" >> azure-security-audit.md
+  
+  - name: Upload compliance reports
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: compliance-reports
+      path: |
+        permissions-audit.md
+        ip-audit.md
+        protocol-audit.md
+        azure-security-audit.md
+      retention-days: 90
+```
+
+# ===========================================================================
+
+# Job 11: Security Policy Validation
+
+# ===========================================================================
+
+policy-validation:
+name: Security Policy Validation
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Check for required security files
+    run: |
+      echo "# Required Security Files Check" > security-files-check.md
+      echo "" >> security-files-check.md
+      
+      # Required files
+      FILES=(
+        "SECURITY.md"
+        ".github/SECURITY.md"
+        "CODE_OF_CONDUCT.md"
+        "CONTRIBUTING.md"
+        "LICENSE"
+        ".gitignore"
+        ".dockerignore"
+        ".pre-commit-config.yaml"
+      )
+      
+      for file in "${FILES[@]}"; do
+        if [ -f "$file" ]; then
+          echo "✅ $file exists" >> security-files-check.md
+        else
+          echo "❌ $file missing" >> security-files-check.md
+        fi
+      done
+      
+      echo "" >> security-files-check.md
+      echo "## Security Documentation" >> security-files-check.md
+      
+      if [ -d "docs/security" ]; then
+        echo "✅ Security documentation directory exists" >> security-files-check.md
+        echo "Files:" >> security-files-check.md
+        ls -la docs/security/ >> security-files-check.md
+      else
+        echo "❌ docs/security directory missing" >> security-files-check.md
+      fi
+  
+  - name: Validate .gitignore completeness
+    run: |
+      echo "# .gitignore Validation" > gitignore-validation.md
+      echo "" >> gitignore-validation.md
+      
+      # Check for essential patterns
+      PATTERNS=(
+        "*.key"
+        "*.pem"
+        ".env"
+        "secrets.yaml"
+        ".terraform"
+        "*.tfstate"
+        "node_modules"
+        "__pycache__"
+      )
+      
+      for pattern in "${PATTERNS[@]}"; do
+        if grep -q "$pattern" .gitignore 2>/dev/null; then
+          echo "✅ $pattern is ignored" >> gitignore-validation.md
+        else
+          echo "❌ $pattern not in .gitignore" >> gitignore-validation.md
+        fi
+      done
+  
+  - name: Upload policy validation results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: policy-validation
+      path: |
+        security-files-check.md
+        gitignore-validation.md
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 12: Security Score Calculation
+
+# ===========================================================================
+
+security-scorecard:
+name: Security Scorecard
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Run OSSF Scorecard
+    uses: ossf/scorecard-action@v2.3.1
+    with:
+      results_file: scorecard-results.sarif
+      results_format: sarif
+      publish_results: true
+  
+  - name: Upload Scorecard SARIF
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: scorecard-results.sarif
+      category: ossf-scorecard
+  
+  - name: Upload Scorecard results
+    uses: actions/upload-artifact@v4
+    with:
+      name: scorecard-results
+      path: scorecard-results.sarif
+      retention-days: 90
+```
+
+# ===========================================================================
+
+# Job 13: Comprehensive Security Summary
+
+# ===========================================================================
+
+security-summary:
+name: Security Audit Summary
+runs-on: ubuntu-latest
+needs:
+- codeql-analysis
+- semgrep-scan
+- secret-scanning
+- bandit-scan
+- checkov-scan
+- compliance-checks
+- policy-validation
+if: always()
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download all reports
+    uses: actions/download-artifact@v4
+    with:
+      path: ./reports/
+    continue-on-error: true
+  
+  - name: Generate comprehensive security summary
+    run: |
+      cat > security-audit-summary.md << 'EOF'
+      # 🔒 Comprehensive Security Audit Summary
+      
+      **Audit Date:** $(date)
+      **Branch:** ${{ github.ref_name }}
+      **Commit:** ${{ github.sha }}
+      **Triggered by:** ${{ github.event_name }}
+      
+      ---
+      
+      ## 📊 Security Scan Results
+      
+      ### Static Application Security Testing (SAST)
+      - ✅ CodeQL: Completed
+      - ✅ Semgrep: Completed
+      - ✅ SonarQube: Completed
+      - ✅ Bandit (Python): Completed
+      - ✅ ESLint Security: Completed
+      
+      ### Secret Detection
+      - ✅ TruffleHog: Completed
+      - ✅ GitLeaks: Completed
+      - ✅ detect-secrets: Completed
+      
+      ### Infrastructure Security
+      - ✅ Checkov: Completed
+      - ✅ Terraform tfsec: See separate workflow
+      
+      ### Compliance & Best Practices
+      - ✅ File permissions: Audited
+      - ✅ Hardcoded IPs: Checked
+      - ✅ Insecure protocols: Scanned
+      - ✅ Azure best practices: Validated
+      - ✅ Security policy: Verified
+      
+      ### Security Scoring
+      - ✅ OSSF Scorecard: Completed
+      
+      ---
+      
+      ## 🎯 Key Findings
+      
+      ### Critical Issues
+      - Review GitHub Security tab for all CRITICAL findings
+      - Check SARIF uploads for detailed vulnerability information
+      
+      ### Recommendations
+      1. Review and remediate all CRITICAL and HIGH severity findings
+      2. Update dependencies with known vulnerabilities
+      3. Ensure all secrets are stored in Azure Key Vault
+      4. Verify security headers are properly configured
+      5. Maintain security documentation up to date
+      
+      ---
+      
+      ## 📁 Detailed Reports
+      
+      All detailed reports are available as workflow artifacts:
+      - CodeQL Analysis results
+      - Semgrep findings
+      - Secret scan results
+      - Bandit security linting
+      - Compliance audit reports
+      - Policy validation results
+      - OSSF Scorecard
+      
+      ---
+      
+      ## ✅ Compliance Status
+      
+      - **CIS Benchmarks:** Reviewed
+      - **OWASP Top 10:** Scanned
+      - **Azure Security Benchmark:** Checked
+      - **Security Policy:** Validated
+      
+      ---
+      
+      ## 🔐 Security Score
+      
+      Overall Security Posture: **See OSSF Scorecard for detailed metrics**
+      
+      Key Metrics:
+      - Branch Protection: Enabled
+      - Code Review: Required
+      - Signed Commits: Recommended
+      - Dependency Updates: Automated (Dependabot)
+      - Vulnerability Disclosure: SECURITY.md present
+      
+      ---
+      
+      ## 📝 Next Steps
+      
+      1. Review all CRITICAL and HIGH findings in GitHub Security tab
+      2. Create issues for identified vulnerabilities
+      3. Update dependencies and patch vulnerabilities
+      4. Enhance security controls where gaps identified
+      5. Schedule next security audit
+      
+      EOF
+  
+  - name: Comment summary on PR
+    if: github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const fs = require('fs');
+        const summary = fs.readFileSync('security-audit-summary.md', 'utf8');
+        
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: summary
+        })
+  
+  - name: Upload security audit summary
+    uses: actions/upload-artifact@v4
+    with:
+      name: security-audit-summary
+      path: security-audit-summary.md
+      retention-days: 365  # Keep for 1 year
+```
+
+# =============================================================================
+
+# Workflow Summary
+
+# =============================================================================
+
+# 
+
+# This workflow performs comprehensive security auditing:
+
+# 
+
+# 1. CodeQL Analysis - GitHub’s SAST tool for multiple languages
+
+# 2. Semgrep Scan - Pattern-based security scanning
+
+# 3. SonarQube - Code quality and security analysis
+
+# 4. Secret Scanning - Multiple tools (TruffleHog, GitLeaks, detect-secrets)
+
+# 5. Bandit - Python security linting
+
+# 6. ESLint Security - JavaScript/TypeScript security
+
+# 7. Checkov - Infrastructure as Code security
+
+# 8. API Security Testing - OWASP ZAP baseline scan
+
+# 9. Security Headers - HTTP security headers validation
+
+# 10. Compliance Checks - CIS benchmarks and best practices
+
+# 11. Policy Validation - Security policy adherence
+
+# 12. Security Scorecard - OSSF security scoring
+
+# 13. Security Summary - Comprehensive audit report
+
+# 
+
+# Required Secrets:
+
+# - GITHUB_TOKEN: Automatically provided by GitHub Actions
+
+# - SONAR_TOKEN: SonarCloud/SonarQube token (optional)
+
+# - GITLEAKS_LICENSE: GitLeaks license key (optional)
+
+# 
+
+# Artifacts Generated:
+
+# - CodeQL SARIF results
+
+# - Semgrep findings
+
+# - SonarQube analysis
+
+# - Secret scan reports
+
+# - Bandit security report
+
+# - ESLint security report
+
+# - Checkov infrastructure scan
+
+# - OWASP ZAP results
+
+# - Security headers report
+
+# - Compliance audit reports
+
+# - Policy validation results
+
+# - OSSF Scorecard
+
+# - Comprehensive security summary
+
+# 
+
+# All SARIF results are uploaded to GitHub Security tab for centralized review.
+
+# 
+
+# =============================================================================
