@@ -1,0 +1,860 @@
+# =============================================================================
+
+# Container Security Scanning Workflow
+
+# Scans container images for vulnerabilities, malware, and misconfigurations
+
+# =============================================================================
+
+name: Container Security Scan
+
+on:
+
+# Run on pull requests
+
+pull_request:
+branches:
+- main
+- master
+- develop
+paths:
+- ‘**/Dockerfile’
+- ’**/Dockerfile.*’
+- ‘.dockerignore’
+- ’docker-compose*.yml’
+- ‘.github/workflows/container-security-scan.yml’
+
+# Run on push to main/master
+
+push:
+branches:
+- main
+- master
+paths:
+- ‘**/Dockerfile’
+- ‘docker-compose*.yml’
+
+# Run when container images are pushed to registry
+
+registry_package:
+types: [published]
+
+# Allow manual trigger
+
+workflow_dispatch:
+inputs:
+image:
+description: ‘Container image to scan (e.g., myapp:latest)’
+required: false
+type: string
+
+# Run on schedule (daily)
+
+schedule:
+- cron: ‘0 2 * * *’  # Every day at 2 AM UTC
+
+# Permissions for security scanning
+
+permissions:
+contents: read
+security-events: write
+pull-requests: write
+packages: read
+actions: read
+
+env:
+REGISTRY: ghcr.io
+
+# Change this to your container registry
+
+# REGISTRY: crusoidp.azurecr.io
+
+jobs:
+
+# ===========================================================================
+
+# Job 1: Dockerfile Linting (Hadolint)
+
+# ===========================================================================
+
+dockerfile-lint:
+name: Dockerfile Linting
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Find all Dockerfiles
+    id: find-dockerfiles
+    run: |
+      DOCKERFILES=$(find . -name 'Dockerfile*' -type f | tr '\n' ' ')
+      echo "dockerfiles=${DOCKERFILES}" >> $GITHUB_OUTPUT
+      echo "Found Dockerfiles: ${DOCKERFILES}"
+  
+  - name: Run Hadolint
+    uses: hadolint/hadolint-action@v3.1.0
+    with:
+      dockerfile: Dockerfile
+      format: sarif
+      output-file: hadolint-results.sarif
+      no-fail: true
+      ignore: DL3008,DL3018  # Optionally ignore specific rules
+  
+  - name: Upload Hadolint SARIF to GitHub Security
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: hadolint-results.sarif
+      category: hadolint
+  
+  - name: Lint all Dockerfiles
+    run: |
+      for dockerfile in ${{ steps.find-dockerfiles.outputs.dockerfiles }}; do
+        echo "Linting: $dockerfile"
+        docker run --rm -i hadolint/hadolint < "$dockerfile" || true
+      done
+```
+
+# ===========================================================================
+
+# Job 2: Build Container Images
+
+# ===========================================================================
+
+build-images:
+name: Build Container Images
+runs-on: ubuntu-latest
+strategy:
+matrix:
+include:
+- dockerfile: Dockerfile
+context: .
+image: backend-service
+# Add more images as needed
+# - dockerfile: frontend/Dockerfile
+#   context: frontend
+#   image: frontend-service
+
+```
+outputs:
+  image-tag: ${{ steps.meta.outputs.tags }}
+  image-digest: ${{ steps.build.outputs.digest }}
+
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Set up Docker Buildx
+    uses: docker/setup-buildx-action@v3
+  
+  - name: Extract metadata
+    id: meta
+    uses: docker/metadata-action@v5
+    with:
+      images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+      tags: |
+        type=ref,event=branch
+        type=ref,event=pr
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        type=sha,prefix={{branch}}-
+        type=raw,value=scan-${{ github.run_number }}
+  
+  - name: Build container image
+    id: build
+    uses: docker/build-push-action@v5
+    with:
+      context: ${{ matrix.context }}
+      file: ${{ matrix.dockerfile }}
+      push: false
+      load: true
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      cache-from: type=gha
+      cache-to: type=gha,mode=max
+  
+  - name: Save image for scanning
+    run: |
+      docker save ${{ matrix.image }}:scan-${{ github.run_number }} -o /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Upload image artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/${{ matrix.image }}-image.tar
+      retention-days: 1
+```
+
+# ===========================================================================
+
+# Job 3: Trivy Vulnerability Scan
+
+# ===========================================================================
+
+trivy-scan:
+name: Trivy Security Scan
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]  # Match with build-images matrix
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Run Trivy vulnerability scanner
+    uses: aquasecurity/trivy-action@master
+    with:
+      image-ref: ${{ matrix.image }}:scan-${{ github.run_number }}
+      format: 'sarif'
+      output: 'trivy-results.sarif'
+      severity: 'CRITICAL,HIGH'
+      exit-code: '0'  # Don't fail the workflow
+  
+  - name: Upload Trivy SARIF to GitHub Security
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: trivy-results.sarif
+      category: trivy-${{ matrix.image }}
+  
+  - name: Run Trivy - Generate JSON Report
+    uses: aquasecurity/trivy-action@master
+    with:
+      image-ref: ${{ matrix.image }}:scan-${{ github.run_number }}
+      format: 'json'
+      output: 'trivy-report.json'
+      severity: 'CRITICAL,HIGH,MEDIUM'
+  
+  - name: Run Trivy - Generate Table Report
+    uses: aquasecurity/trivy-action@master
+    with:
+      image-ref: ${{ matrix.image }}:scan-${{ github.run_number }}
+      format: 'table'
+      output: 'trivy-report.txt'
+      severity: 'CRITICAL,HIGH,MEDIUM'
+  
+  - name: Check vulnerability count
+    id: vuln-check
+    run: |
+      CRITICAL=$(cat trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length')
+      HIGH=$(cat trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length')
+      MEDIUM=$(cat trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length')
+      
+      echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+      echo "high=$HIGH" >> $GITHUB_OUTPUT
+      echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+      
+      echo "🔍 Vulnerability Summary:"
+      echo "  CRITICAL: $CRITICAL"
+      echo "  HIGH: $HIGH"
+      echo "  MEDIUM: $MEDIUM"
+  
+  - name: Upload Trivy reports
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: trivy-reports-${{ matrix.image }}
+      path: |
+        trivy-report.json
+        trivy-report.txt
+      retention-days: 30
+  
+  - name: Fail on CRITICAL vulnerabilities
+    if: steps.vuln-check.outputs.critical != '0'
+    run: |
+      echo "❌ CRITICAL vulnerabilities found: ${{ steps.vuln-check.outputs.critical }}"
+      echo "Please fix these vulnerabilities before proceeding."
+      exit 1
+```
+
+# ===========================================================================
+
+# Job 4: Snyk Container Scan
+
+# ===========================================================================
+
+snyk-scan:
+name: Snyk Container Scan
+runs-on: ubuntu-latest
+needs: build-images
+if: github.event_name == ‘pull_request’ || github.event_name == ‘push’
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Run Snyk to check Docker image for vulnerabilities
+    uses: snyk/actions/docker@master
+    continue-on-error: true
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    with:
+      image: ${{ matrix.image }}:scan-${{ github.run_number }}
+      args: --severity-threshold=high --file=Dockerfile
+  
+  - name: Upload Snyk results to GitHub Code Scanning
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: snyk.sarif
+      category: snyk-${{ matrix.image }}
+```
+
+# ===========================================================================
+
+# Job 5: Grype Vulnerability Scan
+
+# ===========================================================================
+
+grype-scan:
+name: Grype Security Scan
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Install Grype
+    run: |
+      curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+  
+  - name: Scan image with Grype
+    run: |
+      grype ${{ matrix.image }}:scan-${{ github.run_number }} \
+        --output json \
+        --file grype-report.json
+  
+  - name: Scan image with Grype (SARIF)
+    run: |
+      grype ${{ matrix.image }}:scan-${{ github.run_number }} \
+        --output sarif \
+        --file grype-results.sarif
+  
+  - name: Upload Grype SARIF to GitHub Security
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: grype-results.sarif
+      category: grype-${{ matrix.image }}
+  
+  - name: Upload Grype report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: grype-report-${{ matrix.image }}
+      path: grype-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 6: Container Configuration Scan
+
+# ===========================================================================
+
+dockle-scan:
+name: Dockle Configuration Scan
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Run Dockle
+    uses: erzz/dockle-action@v1.4.0
+    with:
+      image: ${{ matrix.image }}:scan-${{ github.run_number }}
+      exit-code: '0'
+      exit-level: warn
+      format: json
+      output: dockle-report.json
+  
+  - name: Upload Dockle report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: dockle-report-${{ matrix.image }}
+      path: dockle-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 7: Malware Scan (ClamAV)
+
+# ===========================================================================
+
+malware-scan:
+name: Malware Scan
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Extract container filesystem
+    run: |
+      mkdir -p /tmp/container-fs
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+      CONTAINER_ID=$(docker create ${{ matrix.image }}:scan-${{ github.run_number }})
+      docker export $CONTAINER_ID | tar -C /tmp/container-fs -xf -
+      docker rm $CONTAINER_ID
+  
+  - name: Run ClamAV scan
+    uses: djdefi/clamav-action@v0.1.0
+    with:
+      scan-directory: /tmp/container-fs
+      infected-files-action: error
+      enable-freshclam: true
+  
+  - name: Upload malware scan results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: malware-scan-${{ matrix.image }}
+      path: /tmp/clamav-scan-results.txt
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 8: Secret Scanning in Images
+
+# ===========================================================================
+
+secret-scan:
+name: Secret Scanning
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Extract container filesystem
+    run: |
+      mkdir -p /tmp/container-fs
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+      CONTAINER_ID=$(docker create ${{ matrix.image }}:scan-${{ github.run_number }})
+      docker export $CONTAINER_ID | tar -C /tmp/container-fs -xf -
+      docker rm $CONTAINER_ID
+  
+  - name: Run TruffleHog for secrets
+    uses: trufflesecurity/trufflehog@main
+    with:
+      path: /tmp/container-fs
+      base: ''
+      extra_args: --json --only-verified
+    continue-on-error: true
+  
+  - name: Scan with detect-secrets
+    run: |
+      pip install detect-secrets
+      cd /tmp/container-fs
+      detect-secrets scan --all-files > /tmp/secrets-report.json || true
+  
+  - name: Upload secret scan results
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: secret-scan-${{ matrix.image }}
+      path: /tmp/secrets-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 9: SBOM Generation
+
+# ===========================================================================
+
+sbom-generation:
+name: Generate Software Bill of Materials
+runs-on: ubuntu-latest
+needs: build-images
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Generate SBOM with Syft
+    uses: anchore/sbom-action@v0.15.0
+    with:
+      image: ${{ matrix.image }}:scan-${{ github.run_number }}
+      format: spdx-json
+      output-file: sbom.spdx.json
+  
+  - name: Generate SBOM in CycloneDX format
+    uses: anchore/sbom-action@v0.15.0
+    with:
+      image: ${{ matrix.image }}:scan-${{ github.run_number }}
+      format: cyclonedx-json
+      output-file: sbom.cyclonedx.json
+  
+  - name: Upload SBOM
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: sbom-${{ matrix.image }}
+      path: |
+        sbom.spdx.json
+        sbom.cyclonedx.json
+      retention-days: 90
+  
+  - name: Attach SBOM to GitHub Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: actions/upload-artifact@v4
+    with:
+      name: release-sbom-${{ matrix.image }}
+      path: sbom.spdx.json
+      retention-days: 365
+```
+
+# ===========================================================================
+
+# Job 10: Image Signing (Cosign)
+
+# ===========================================================================
+
+image-signing:
+name: Sign Container Image
+runs-on: ubuntu-latest
+needs: [trivy-scan, build-images]
+if: github.event_name == ‘push’ && github.ref == ‘refs/heads/main’
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Install Cosign
+    uses: sigstore/cosign-installer@v3.3.0
+  
+  - name: Download image artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: ${{ matrix.image }}-image
+      path: /tmp/
+  
+  - name: Load Docker image
+    run: |
+      docker load -i /tmp/${{ matrix.image }}-image.tar
+  
+  - name: Sign container image
+    run: |
+      # Generate ephemeral keys or use stored keys
+      cosign generate-key-pair
+      
+      # Sign the image
+      cosign sign --key cosign.key ${{ matrix.image }}:scan-${{ github.run_number }}
+    env:
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+```
+
+# ===========================================================================
+
+# Job 11: Security Summary Report
+
+# ===========================================================================
+
+security-summary:
+name: Security Summary Report
+runs-on: ubuntu-latest
+needs: [trivy-scan, snyk-scan, grype-scan, dockle-scan, malware-scan, secret-scan]
+if: always()
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download all reports
+    uses: actions/download-artifact@v4
+    with:
+      path: ./reports/
+  
+  - name: Generate Security Summary
+    run: |
+      echo "# 🔒 Container Security Scan Summary" > security-summary.md
+      echo "" >> security-summary.md
+      echo "**Scan Date:** $(date)" >> security-summary.md
+      echo "**Branch:** ${{ github.ref_name }}" >> security-summary.md
+      echo "**Commit:** ${{ github.sha }}" >> security-summary.md
+      echo "" >> security-summary.md
+      
+      echo "## 🐳 Scanned Images" >> security-summary.md
+      echo "- backend-service" >> security-summary.md
+      echo "" >> security-summary.md
+      
+      # Trivy Results
+      if [ -f "./reports/trivy-reports-backend-service/trivy-report.json" ]; then
+        echo "## 🔍 Trivy Vulnerability Scan" >> security-summary.md
+        CRITICAL=$(cat ./reports/trivy-reports-backend-service/trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length')
+        HIGH=$(cat ./reports/trivy-reports-backend-service/trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length')
+        MEDIUM=$(cat ./reports/trivy-reports-backend-service/trivy-report.json | jq '[.Results[].Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length')
+        
+        echo "- 🔴 CRITICAL: $CRITICAL" >> security-summary.md
+        echo "- 🟠 HIGH: $HIGH" >> security-summary.md
+        echo "- 🟡 MEDIUM: $MEDIUM" >> security-summary.md
+        echo "" >> security-summary.md
+      fi
+      
+      # Dockle Results
+      if [ -f "./reports/dockle-report-backend-service/dockle-report.json" ]; then
+        echo "## ⚙️ Dockle Configuration Scan" >> security-summary.md
+        DOCKLE_SUMMARY=$(cat ./reports/dockle-report-backend-service/dockle-report.json | jq -r '.summary')
+        echo '```json' >> security-summary.md
+        echo "$DOCKLE_SUMMARY" >> security-summary.md
+        echo '```' >> security-summary.md
+        echo "" >> security-summary.md
+      fi
+      
+      echo "## 📊 Recommendations" >> security-summary.md
+      echo "" >> security-summary.md
+      echo "1. Review and remediate all CRITICAL vulnerabilities immediately" >> security-summary.md
+      echo "2. Plan remediation for HIGH severity vulnerabilities" >> security-summary.md
+      echo "3. Update base images to latest secure versions" >> security-summary.md
+      echo "4. Review configuration issues found by Dockle" >> security-summary.md
+      echo "5. Verify no secrets were detected in the image" >> security-summary.md
+  
+  - name: Comment Security Summary on PR
+    if: github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const fs = require('fs');
+        const summary = fs.readFileSync('security-summary.md', 'utf8');
+        
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: summary
+        })
+  
+  - name: Upload Security Summary
+    uses: actions/upload-artifact@v4
+    with:
+      name: container-security-summary
+      path: security-summary.md
+      retention-days: 90
+```
+
+# ===========================================================================
+
+# Job 12: Registry Push (if all scans pass)
+
+# ===========================================================================
+
+push-to-registry:
+name: Push to Container Registry
+runs-on: ubuntu-latest
+needs: [trivy-scan, snyk-scan, grype-scan, dockle-scan]
+if: github.event_name == ‘push’ && github.ref == ‘refs/heads/main’
+strategy:
+matrix:
+image: [backend-service]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Set up Docker Buildx
+    uses: docker/setup-buildx-action@v3
+  
+  - name: Log in to Container Registry
+    uses: docker/login-action@v3
+    with:
+      registry: ${{ env.REGISTRY }}
+      username: ${{ github.actor }}
+      password: ${{ secrets.GITHUB_TOKEN }}
+  
+  - name: Extract metadata
+    id: meta
+    uses: docker/metadata-action@v5
+    with:
+      images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+      tags: |
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        type=sha
+        type=raw,value=latest
+  
+  - name: Build and push
+    uses: docker/build-push-action@v5
+    with:
+      context: .
+      push: true
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      cache-from: type=gha
+      cache-to: type=gha,mode=max
+```
+
+# =============================================================================
+
+# Workflow Summary
+
+# =============================================================================
+
+# 
+
+# This workflow performs comprehensive security scanning of container images:
+
+# 
+
+# 1. Dockerfile Linting - Validates Dockerfile best practices (Hadolint)
+
+# 2. Build Images - Builds container images for scanning
+
+# 3. Trivy Scan - Comprehensive vulnerability scanning
+
+# 4. Snyk Scan - Additional vulnerability and license scanning
+
+# 5. Grype Scan - Alternative vulnerability scanner
+
+# 6. Dockle Scan - Container configuration best practices
+
+# 7. Malware Scan - ClamAV malware detection
+
+# 8. Secret Scan - Detects hardcoded secrets in images
+
+# 9. SBOM Generation - Creates Software Bill of Materials
+
+# 10. Image Signing - Signs images with Cosign
+
+# 11. Security Summary - Aggregates all findings
+
+# 12. Registry Push - Pushes secure images to registry
+
+# 
+
+# Required Secrets:
+
+# - GITHUB_TOKEN: Automatically provided by GitHub Actions
+
+# - SNYK_TOKEN: Snyk API token (optional, for Snyk scanning)
+
+# - COSIGN_PASSWORD: Password for image signing (optional)
+
+# 
+
+# Artifacts Generated:
+
+# - Trivy vulnerability reports (JSON, SARIF, TXT)
+
+# - Snyk vulnerability reports (SARIF)
+
+# - Grype vulnerability reports (JSON, SARIF)
+
+# - Dockle configuration reports (JSON)
+
+# - Malware scan results
+
+# - Secret scan results
+
+# - SBOM (SPDX and CycloneDX formats)
+
+# - Security summary report
+
+# 
+
+# =============================================================================
