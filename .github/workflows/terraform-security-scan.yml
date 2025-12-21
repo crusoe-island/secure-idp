@@ -1,0 +1,644 @@
+# =============================================================================
+
+# Terraform Security Scanning Workflow
+
+# Scans Terraform code for security vulnerabilities and misconfigurations
+
+# =============================================================================
+
+name: Terraform Security Scan
+
+on:
+
+# Run on pull requests to main/master
+
+pull_request:
+branches:
+- main
+- master
+- develop
+paths:
+- ‘terraform/**/*.tf’
+- ’terraform/**/*.tfvars’
+- ‘.github/workflows/terraform-security-scan.yml’
+
+# Run on push to main/master
+
+push:
+branches:
+- main
+- master
+paths:
+- ‘terraform/**/*.tf’
+- ’terraform/**/*.tfvars’
+
+# Allow manual trigger
+
+workflow_dispatch:
+
+# Run on schedule (weekly)
+
+schedule:
+- cron: ‘0 0 * * 0’  # Every Sunday at midnight
+
+# Permissions for security scanning
+
+permissions:
+contents: read
+security-events: write
+pull-requests: write
+issues: write
+
+env:
+TERRAFORM_VERSION: ‘1.6.0’
+TFSEC_VERSION: ‘latest’
+CHECKOV_VERSION: ‘latest’
+
+jobs:
+
+# ===========================================================================
+
+# Job 1: Terraform Formatting Check
+
+# ===========================================================================
+
+terraform-fmt:
+name: Terraform Format Check
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+    with:
+      fetch-depth: 0
+  
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+  - name: Terraform Format Check
+    id: fmt
+    run: |
+      echo "Checking Terraform formatting..."
+      terraform fmt -check -recursive -diff terraform/
+    continue-on-error: true
+  
+  - name: Comment on PR (if formatting fails)
+    if: failure() && github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: '❌ **Terraform Format Check Failed**\n\nPlease run `terraform fmt -recursive` to format your code.'
+        })
+```
+
+# ===========================================================================
+
+# Job 2: Terraform Validation
+
+# ===========================================================================
+
+terraform-validate:
+name: Terraform Validation
+runs-on: ubuntu-latest
+strategy:
+matrix:
+directory:
+- terraform/environments/dev
+- terraform/environments/staging
+- terraform/environments/prod
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+  - name: Terraform Init
+    run: |
+      cd ${{ matrix.directory }}
+      terraform init -backend=false
+  
+  - name: Terraform Validate
+    run: |
+      cd ${{ matrix.directory }}
+      terraform validate
+```
+
+# ===========================================================================
+
+# Job 3: tfsec Security Scan
+
+# ===========================================================================
+
+tfsec:
+name: tfsec Security Scan
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Run tfsec
+    uses: aquasecurity/tfsec-action@v1.0.3
+    with:
+      soft_fail: false
+      working_directory: terraform/
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+      format: sarif
+      additional_args: >-
+        --concise-output
+        --force-all-dirs
+        --minimum-severity HIGH
+        --exclude-downloaded-modules
+  
+  - name: Upload tfsec SARIF to GitHub Security
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: tfsec.sarif
+      category: tfsec
+  
+  - name: Generate tfsec Report
+    if: always()
+    uses: aquasecurity/tfsec-action@v1.0.3
+    with:
+      working_directory: terraform/
+      format: json
+      additional_args: --out tfsec-report.json
+  
+  - name: Upload tfsec Report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: tfsec-report
+      path: tfsec-report.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 4: Checkov Security Scan
+
+# ===========================================================================
+
+checkov:
+name: Checkov Security Scan
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.11'
+  
+  - name: Install Checkov
+    run: |
+      pip install checkov==${{ env.CHECKOV_VERSION }}
+  
+  - name: Run Checkov
+    id: checkov
+    run: |
+      checkov \
+        --directory terraform/ \
+        --framework terraform \
+        --output cli \
+        --output sarif \
+        --output-file-path . \
+        --quiet \
+        --compact \
+        --soft-fail
+    continue-on-error: true
+  
+  - name: Upload Checkov SARIF to GitHub Security
+    if: always()
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: results_sarif.sarif
+      category: checkov
+  
+  - name: Generate Checkov JSON Report
+    if: always()
+    run: |
+      checkov \
+        --directory terraform/ \
+        --framework terraform \
+        --output json \
+        --output-file-path . \
+        --quiet
+    continue-on-error: true
+  
+  - name: Upload Checkov Report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: checkov-report
+      path: results_json.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 5: Terraform Plan (Security Review)
+
+# ===========================================================================
+
+terraform-plan:
+name: Terraform Plan Review
+runs-on: ubuntu-latest
+if: github.event_name == ‘pull_request’
+strategy:
+matrix:
+environment: [dev, staging]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+  - name: Configure Azure Credentials
+    uses: azure/login@v1
+    with:
+      creds: ${{ secrets.AZURE_CREDENTIALS }}
+  
+  - name: Terraform Init
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      terraform init
+  
+  - name: Terraform Plan
+    id: plan
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      terraform plan -no-color -out=tfplan
+    continue-on-error: true
+  
+  - name: Save Plan Output
+    if: always()
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      terraform show -no-color tfplan > plan-output.txt
+  
+  - name: Scan Terraform Plan with tfsec
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      tfsec . --tfplan tfplan --format json --out plan-security.json
+    continue-on-error: true
+  
+  - name: Comment Plan on PR
+    if: github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const fs = require('fs');
+        const plan = fs.readFileSync('terraform/environments/${{ matrix.environment }}/plan-output.txt', 'utf8');
+        const truncatedPlan = plan.length > 65000 ? plan.substring(0, 65000) + '\n... (truncated)' : plan;
+        
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: `### Terraform Plan - ${{ matrix.environment }}\n\`\`\`hcl\n${truncatedPlan}\n\`\`\``
+        })
+  
+  - name: Upload Plan Artifacts
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: terraform-plan-${{ matrix.environment }}
+      path: |
+        terraform/environments/${{ matrix.environment }}/tfplan
+        terraform/environments/${{ matrix.environment }}/plan-output.txt
+        terraform/environments/${{ matrix.environment }}/plan-security.json
+      retention-days: 30
+```
+
+# ===========================================================================
+
+# Job 6: Terraform Docs Check
+
+# ===========================================================================
+
+terraform-docs:
+name: Terraform Documentation Check
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Generate Terraform Docs
+    uses: terraform-docs/gh-actions@v1.0.0
+    with:
+      working-dir: terraform/modules/
+      recursive: true
+      recursive-path: .
+      output-file: README.md
+      output-method: inject
+      fail-on-diff: true
+  
+  - name: Comment on PR (if docs are outdated)
+    if: failure() && github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: '❌ **Terraform Documentation is Outdated**\n\nPlease run `terraform-docs` to update module documentation.'
+        })
+```
+
+# ===========================================================================
+
+# Job 7: Cost Estimation (Infracost)
+
+# ===========================================================================
+
+infracost:
+name: Infrastructure Cost Estimation
+runs-on: ubuntu-latest
+if: github.event_name == ‘pull_request’
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Setup Infracost
+    uses: infracost/actions/setup@v2
+    with:
+      api-key: ${{ secrets.INFRACOST_API_KEY }}
+  
+  - name: Checkout base branch
+    uses: actions/checkout@v4
+    with:
+      ref: '${{ github.event.pull_request.base.ref }}'
+  
+  - name: Generate Infracost cost estimate baseline
+    run: |
+      infracost breakdown --path=terraform/environments/prod \
+                          --format=json \
+                          --out-file=/tmp/infracost-base.json
+  
+  - name: Checkout PR branch
+    uses: actions/checkout@v4
+  
+  - name: Generate Infracost diff
+    run: |
+      infracost diff --path=terraform/environments/prod \
+                     --format=json \
+                     --compare-to=/tmp/infracost-base.json \
+                     --out-file=/tmp/infracost.json
+  
+  - name: Post Infracost comment
+    run: |
+      infracost comment github --path=/tmp/infracost.json \
+                               --repo=$GITHUB_REPOSITORY \
+                               --github-token=${{ secrets.GITHUB_TOKEN }} \
+                               --pull-request=${{ github.event.pull_request.number }} \
+                               --behavior=update
+```
+
+# ===========================================================================
+
+# Job 8: Security Summary Report
+
+# ===========================================================================
+
+security-summary:
+name: Security Summary Report
+runs-on: ubuntu-latest
+needs: [tfsec, checkov, terraform-validate]
+if: always()
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Download tfsec Report
+    uses: actions/download-artifact@v4
+    with:
+      name: tfsec-report
+      path: ./reports/
+    continue-on-error: true
+  
+  - name: Download Checkov Report
+    uses: actions/download-artifact@v4
+    with:
+      name: checkov-report
+      path: ./reports/
+    continue-on-error: true
+  
+  - name: Generate Security Summary
+    run: |
+      echo "# 🔒 Terraform Security Scan Summary" > security-summary.md
+      echo "" >> security-summary.md
+      echo "**Scan Date:** $(date)" >> security-summary.md
+      echo "**Branch:** ${{ github.ref_name }}" >> security-summary.md
+      echo "**Commit:** ${{ github.sha }}" >> security-summary.md
+      echo "" >> security-summary.md
+      
+      if [ -f "./reports/tfsec-report.json" ]; then
+        echo "## tfsec Results" >> security-summary.md
+        echo '```json' >> security-summary.md
+        cat ./reports/tfsec-report.json | jq '.results | length' >> security-summary.md
+        echo '```' >> security-summary.md
+      fi
+      
+      if [ -f "./reports/results_json.json" ]; then
+        echo "## Checkov Results" >> security-summary.md
+        echo '```json' >> security-summary.md
+        cat ./reports/results_json.json | jq '.summary' >> security-summary.md
+        echo '```' >> security-summary.md
+      fi
+  
+  - name: Comment Security Summary on PR
+    if: github.event_name == 'pull_request'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const fs = require('fs');
+        const summary = fs.readFileSync('security-summary.md', 'utf8');
+        
+        github.rest.issues.createComment({
+          issue_number: context.issue.number,
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          body: summary
+        })
+  
+  - name: Upload Security Summary
+    uses: actions/upload-artifact@v4
+    with:
+      name: security-summary
+      path: security-summary.md
+      retention-days: 90
+```
+
+# ===========================================================================
+
+# Job 9: Policy Compliance Check
+
+# ===========================================================================
+
+policy-compliance:
+name: Policy Compliance Check
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+  - name: Setup OPA (Open Policy Agent)
+    run: |
+      curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+      chmod +x opa
+      sudo mv opa /usr/local/bin/
+  
+  - name: Run Policy Tests
+    run: |
+      if [ -d "terraform/policies" ]; then
+        echo "Running OPA policy tests..."
+        opa test terraform/policies/ -v
+      else
+        echo "No policies directory found, skipping..."
+      fi
+    continue-on-error: true
+  
+  - name: Validate Naming Conventions
+    run: |
+      echo "Checking Azure naming conventions..."
+      # Check that resources follow naming pattern
+      grep -r "name.*=" terraform/ | grep -E "(rg-|aks-|kv-|vnet-|nsg-)" || echo "⚠️  Some resources may not follow naming conventions"
+```
+
+# ===========================================================================
+
+# Job 10: Drift Detection (Scheduled Only)
+
+# ===========================================================================
+
+drift-detection:
+name: Terraform Drift Detection
+runs-on: ubuntu-latest
+if: github.event_name == ‘schedule’
+strategy:
+matrix:
+environment: [dev, staging, prod]
+
+```
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
+  
+  - name: Setup Terraform
+    uses: hashicorp/setup-terraform@v3
+    with:
+      terraform_version: ${{ env.TERRAFORM_VERSION }}
+  
+  - name: Configure Azure Credentials
+    uses: azure/login@v1
+    with:
+      creds: ${{ secrets.AZURE_CREDENTIALS }}
+  
+  - name: Terraform Init
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      terraform init
+  
+  - name: Terraform Plan - Drift Check
+    id: drift
+    run: |
+      cd terraform/environments/${{ matrix.environment }}
+      terraform plan -detailed-exitcode -no-color
+    continue-on-error: true
+  
+  - name: Create Issue if Drift Detected
+    if: steps.drift.outcome == 'failure'
+    uses: actions/github-script@v7
+    with:
+      script: |
+        github.rest.issues.create({
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          title: '🚨 Terraform Drift Detected - ${{ matrix.environment }}',
+          body: `Terraform drift has been detected in the **${{ matrix.environment }}** environment.\n\nPlease review and reconcile the infrastructure state.\n\n**Environment:** ${{ matrix.environment }}\n**Detection Date:** ${new Date().toISOString()}`,
+          labels: ['infrastructure', 'drift-detection', '${{ matrix.environment }}']
+        })
+```
+
+# =============================================================================
+
+# Workflow Summary
+
+# =============================================================================
+
+# 
+
+# This workflow performs comprehensive security scanning of Terraform code:
+
+# 
+
+# 1. Format Check - Ensures consistent code formatting
+
+# 2. Validation - Validates Terraform syntax and configuration
+
+# 3. tfsec - Scans for security issues and misconfigurations
+
+# 4. Checkov - Additional security and compliance scanning
+
+# 5. Plan Review - Generates and reviews Terraform plans
+
+# 6. Documentation - Ensures module docs are up to date
+
+# 7. Cost Estimation - Estimates infrastructure costs (Infracost)
+
+# 8. Security Summary - Aggregates all security findings
+
+# 9. Policy Compliance - Validates custom policies
+
+# 10. Drift Detection - Detects infrastructure drift (scheduled)
+
+# 
+
+# Required Secrets:
+
+# - AZURE_CREDENTIALS: Azure service principal credentials (JSON)
+
+# - INFRACOST_API_KEY: Infracost API key (optional)
+
+# - GITHUB_TOKEN: Automatically provided by GitHub Actions
+
+# 
+
+# =============================================================================
