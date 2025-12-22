@@ -1,0 +1,970 @@
+# Backstage Application Configuration
+
+# Crusoe Internal Developer Platform (IDP)
+
+# Version: 1.0
+
+# Last Updated: 2024-12-21
+
+app:
+title: Crusoe IDP
+baseUrl: https://backstage.crusoe-island.com
+
+support:
+url: https://wiki.crusoe-island.com/support
+items:
+- title: Platform Documentation
+icon: docs
+links:
+- url: https://wiki.crusoe-island.com/idp
+title: Getting Started
+- url: https://wiki.crusoe-island.com/idp/troubleshooting
+title: Troubleshooting
+- url: https://wiki.crusoe-island.com/idp/runbooks
+title: Runbooks
+
+```
+  - title: Support Channels
+    icon: chat
+    links:
+      - url: https://crusoe-island.slack.com/channels/platform-support
+        title: '#platform-support'
+      - url: https://crusoe-island.slack.com/channels/developers
+        title: '#developers'
+      - url: mailto:platform-team@crusoe-island.com
+        title: Email Platform Team
+```
+
+organization:
+name: Crusoe Island Technologies
+
+backend:
+
+# Used for enabling authentication, secret management,
+
+# and more secure communication between Backstage and external services
+
+baseUrl: https://backstage.crusoe-island.com
+listen:
+port: 7007
+# Uncomment for local development
+# host: 0.0.0.0
+
+csp:
+# Content Security Policy
+connect-src: [”‘self’”, ‘http:’, ‘https:’]
+img-src: [”‘self’”, ‘data:’, ‘https:’]
+# Upgrade Insecure Requests
+upgrade-insecure-requests: true
+
+cors:
+origin: https://backstage.crusoe-island.com
+methods: [GET, HEAD, PATCH, POST, PUT, DELETE]
+credentials: true
+
+# Database configuration
+
+database:
+client: pg
+connection:
+host: ${POSTGRES_HOST}
+port: ${POSTGRES_PORT}
+user: ${POSTGRES_USER}
+password: ${POSTGRES_PASSWORD}
+database: ${POSTGRES_DB}
+ssl:
+ca: ${POSTGRES_CA_CERT}
+rejectUnauthorized: true
+
+```
+# Connection pool settings
+pool:
+  min: 5
+  max: 20
+  acquireTimeoutMillis: 60000
+  idleTimeoutMillis: 600000
+```
+
+# Cache configuration
+
+cache:
+store: memory
+# For production, use Redis:
+# store: redis
+# connection: redis://redis-service:6379
+
+# Reading configuration
+
+reading:
+allow:
+- host: github.com
+- host: ‘*.github.com’
+- host: raw.githubusercontent.com
+
+# Authentication configuration
+
+auth:
+
+# Session configuration
+
+session:
+secret: ${SESSION_SECRET}
+
+environment: production
+
+# Providers
+
+providers:
+# Azure Active Directory (Primary)
+microsoft:
+development:
+clientId: ${AUTH_MICROSOFT_CLIENT_ID}
+clientSecret: ${AUTH_MICROSOFT_CLIENT_SECRET}
+tenantId: ${AUTH_MICROSOFT_TENANT_ID}
+domainHint: ${AUTH_MICROSOFT_DOMAIN_HINT}
+additionalScopes:
+- Mail.Send
+- User.Read
+- Group.Read.All
+
+```
+# GitHub (for repository access)
+github:
+  development:
+    clientId: ${AUTH_GITHUB_CLIENT_ID}
+    clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+    ## uncomment if using GitHub Enterprise
+    # enterpriseInstanceUrl: ${AUTH_GITHUB_ENTERPRISE_INSTANCE_URL}
+
+# Guest access (for read-only access)
+guest:
+  dangerouslyAllowOutsideDevelopment: false
+```
+
+# Sign-in configuration
+
+signInPage: microsoft  # Default to Azure AD
+
+# Integration configurations
+
+integrations:
+
+# GitHub integration
+
+github:
+- host: github.com
+apps:
+- appId: ${GITHUB_APP_ID}
+clientId: ${GITHUB_APP_CLIENT_ID}
+clientSecret: ${GITHUB_APP_CLIENT_SECRET}
+webhookSecret: ${GITHUB_APP_WEBHOOK_SECRET}
+privateKey: ${GITHUB_APP_PRIVATE_KEY}
+token: ${GITHUB_TOKEN}
+
+# Azure DevOps (if using)
+
+azure:
+- host: dev.azure.com
+credentials:
+- personalAccessToken: ${AZURE_DEVOPS_TOKEN}
+
+# Proxy configuration for external services
+
+proxy:
+
+# Azure DevOps
+
+‘/azure-devops’:
+target: https://dev.azure.com
+headers:
+Authorization: Bearer ${AZURE_DEVOPS_TOKEN}
+
+# Grafana
+
+‘/grafana/api’:
+target: https://grafana.crusoe-island.com
+headers:
+Authorization: Bearer ${GRAFANA_TOKEN}
+changeOrigin: true
+secure: true
+
+# Prometheus
+
+‘/prometheus/api’:
+target: https://prometheus.crusoe-island.com
+headers:
+Authorization: Bearer ${PROMETHEUS_TOKEN}
+changeOrigin: true
+secure: true
+
+# ArgoCD
+
+‘/argocd/api’:
+target: https://argocd.crusoe-island.com
+changeOrigin: true
+secure: true
+headers:
+Cookie: ${ARGOCD_AUTH_TOKEN}
+
+# SonarQube
+
+‘/sonarqube’:
+target: https://sonarqube.crusoe-island.com
+headers:
+Authorization: Bearer ${SONARQUBE_TOKEN}
+changeOrigin: true
+secure: true
+
+# Catalog configuration
+
+catalog:
+
+# Reload interval
+
+processingInterval:
+frequency:
+seconds: 600  # 10 minutes
+timeout:
+seconds: 90
+
+# Catalog rules
+
+rules:
+- allow: [Component, System, API, Resource, Location, Domain, Group, User, Template]
+
+# Catalog locations
+
+locations:
+# Organization data from Azure AD
+- type: microsoft-graph-org
+target: https://graph.microsoft.com/v1.0
+rules:
+- allow: [User, Group]
+
+```
+# Templates repository
+- type: url
+  target: https://github.com/crusoe-island/backstage-templates/blob/main/all-templates.yaml
+  rules:
+    - allow: [Template]
+
+# Platform components
+- type: url
+  target: https://github.com/crusoe-island/idp-platform/blob/main/catalog-info.yaml
+  rules:
+    - allow: [Component, System, API, Resource, Domain]
+
+# Applications auto-discovery
+- type: url
+  target: https://github.com/crusoe-island/*/blob/main/catalog-info.yaml
+  rules:
+    - allow: [Component, API]
+```
+
+# Entity providers
+
+providers:
+# Azure DevOps provider
+azureDevOps:
+host: dev.azure.com
+organization: crusoe-island
+project: ‘*’
+
+```
+# GitHub org discovery
+github:
+  organization: 'crusoe-island'
+  catalogPath: '/catalog-info.yaml'
+  filters:
+    branch: 'main'
+    repository: '.*'
+  schedule:
+    frequency:
+      minutes: 30
+    timeout:
+      minutes: 3
+
+# Microsoft Graph for users and groups
+microsoftGraphOrg:
+  default:
+    tenantId: ${AUTH_MICROSOFT_TENANT_ID}
+    clientId: ${MICROSOFT_GRAPH_CLIENT_ID}
+    clientSecret: ${MICROSOFT_GRAPH_CLIENT_SECRET}
+    user:
+      filter: accountEnabled eq true
+      expand: manager
+    group:
+      filter: >
+        startswith(displayName, 'IDP-') or
+        startswith(displayName, 'Team-') or
+        startswith(displayName, 'Platform-')
+    schedule:
+      frequency:
+        hours: 1
+      timeout:
+        minutes: 50
+```
+
+# Kubernetes configuration
+
+kubernetes:
+serviceLocatorMethod:
+type: ‘multiTenant’
+
+clusterLocatorMethods:
+- type: ‘config’
+clusters:
+# Development cluster
+- name: aks-idp-dev
+url: ${K8S_DEV_URL}
+authProvider: ‘azure’
+skipTLSVerify: false
+skipMetricsLookup: false
+dashboardUrl: https://k8s-dev.crusoe-island.com
+dashboardApp: standard
+
+```
+    # Staging cluster
+    - name: aks-idp-staging
+      url: ${K8S_STAGING_URL}
+      authProvider: 'azure'
+      skipTLSVerify: false
+      skipMetricsLookup: false
+      dashboardUrl: https://k8s-staging.crusoe-island.com
+      dashboardApp: standard
+
+    # Production cluster
+    - name: aks-idp-prod
+      url: ${K8S_PROD_URL}
+      authProvider: 'azure'
+      skipTLSVerify: false
+      skipMetricsLookup: false
+      dashboardUrl: https://k8s-prod.crusoe-island.com
+      dashboardApp: standard
+```
+
+# Azure Resource Manager (ARM) integration
+
+azureDevOps:
+host: dev.azure.com
+token: ${AZURE_DEVOPS_TOKEN}
+organization: crusoe-island
+
+# ArgoCD integration
+
+argocd:
+username: ${ARGOCD_USERNAME}
+password: ${ARGOCD_PASSWORD}
+appLocatorMethods:
+- type: ‘config’
+instances:
+- name: argocd-prod
+url: https://argocd.crusoe-island.com
+token: ${ARGOCD_AUTH_TOKEN}
+- name: argocd-staging
+url: https://argocd-staging.crusoe-island.com
+token: ${ARGOCD_STAGING_AUTH_TOKEN}
+
+# TechDocs configuration
+
+techdocs:
+builder: ‘local’  # Use ‘external’ for production
+generator:
+runIn: ‘local’  # Use ‘docker’ for production
+
+publisher:
+type: ‘azureBlobStorage’
+azureBlobStorage:
+containerName: ${TECHDOCS_AZURE_BLOB_CONTAINER_NAME}
+credentials:
+accountName: ${TECHDOCS_AZURE_BLOB_ACCOUNT_NAME}
+accountKey: ${TECHDOCS_AZURE_BLOB_ACCOUNT_KEY}
+
+# Scaffolder (Software Templates) configuration
+
+scaffolder:
+
+# Default parameters for templates
+
+defaultAuthor:
+name: Backstage Scaffolder
+email: backstage@crusoe-island.com
+
+defaultCommitMessage: ‘Initial commit from Backstage’
+
+# Cost Insights (if using Azure Cost Management)
+
+costInsights:
+engineerCost: 200000  # Annual cost per engineer in USD
+engineerThreshold: 0.5  # Percentage of engineer cost for alerts
+
+products:
+computeEngine:
+name: Azure Compute
+icon: compute
+cloudDataflow:
+name: Azure Data Services
+icon: data
+cloudStorage:
+name: Azure Storage
+icon: storage
+bigQuery:
+name: Azure Analytics
+icon: search
+
+# SonarQube integration
+
+sonarqube:
+baseUrl: https://sonarqube.crusoe-island.com
+apiKey: ${SONARQUBE_TOKEN}
+instances:
+- name: default
+baseUrl: https://sonarqube.crusoe-island.com
+apiKey: ${SONARQUBE_TOKEN}
+
+# PagerDuty integration
+
+pagerduty:
+eventsBaseUrl: ‘https://events.pagerduty.com/v2’
+
+# Sentry integration
+
+sentry:
+organization: crusoe-island
+
+# Jenkins integration (if using)
+
+jenkins:
+instances:
+- name: default
+baseUrl: https://jenkins.crusoe-island.com
+username: ${JENKINS_USERNAME}
+apiKey: ${JENKINS_API_TOKEN}
+
+# Jira integration
+
+jira:
+
+- name: crusoe-jira
+  baseUrl: https://crusoe-island.atlassian.net
+  userEmail: ${JIRA_USER_EMAIL}
+  token: ${JIRA_API_TOKEN}
+
+# Confluence integration
+
+confluence:
+
+- name: crusoe-confluence
+  baseUrl: https://crusoe-island.atlassian.net/wiki
+  auth:
+  email: ${CONFLUENCE_USER_EMAIL}
+  token: ${CONFLUENCE_API_TOKEN}
+
+# Slack integration
+
+slack:
+token: ${SLACK_TOKEN}
+appToken: ${SLACK_APP_TOKEN}
+channels:
+platformSupport: ‘platform-support’
+incidents: ‘incidents’
+deployments: ‘deployments’
+
+# Lighthouse (performance monitoring)
+
+lighthouse:
+baseUrl: https://lighthouse.crusoe-island.com
+
+# Search configuration
+
+search:
+pg:
+highlightOptions:
+useHighlight: true  # Enable search result highlighting
+maxWords: 35
+minWords: 15
+
+# Analytics (optional)
+
+analytics:
+ga:
+trackingId: ${GOOGLE_ANALYTICS_TRACKING_ID}
+debug: false
+
+# Custom dimensions
+
+customDimensions:
+- name: ‘User Role’
+index: 1
+- name: ‘Team’
+index: 2
+- name: ‘Environment’
+index: 3
+
+# Permission framework configuration
+
+permission:
+enabled: true
+
+# Notifications
+
+notifications:
+processors:
+email:
+transportConfig:
+transport: ses
+ses:
+region: eu-west-1
+
+```
+slack:
+  channels:
+    platform-support: ${SLACK_WEBHOOK_PLATFORM_SUPPORT}
+    incidents: ${SLACK_WEBHOOK_INCIDENTS}
+    deployments: ${SLACK_WEBHOOK_DEPLOYMENTS}
+
+webhook:
+  endpoints:
+    - url: https://hooks.crusoe-island.com/backstage
+      method: POST
+      headers:
+        Authorization: Bearer ${WEBHOOK_TOKEN}
+```
+
+# Homepage configuration
+
+home:
+clocks:
+- label: ‘UTC’
+timezone: ‘UTC’
+- label: ‘Amsterdam’
+timezone: ‘Europe/Amsterdam’
+- label: ‘New York’
+timezone: ‘America/New_York’
+- label: ‘San Francisco’
+timezone: ‘America/Los_Angeles’
+
+# Enabled plugins and features
+
+enabled:
+plugins:
+# Core plugins
+- catalog
+- catalog-import
+- catalog-graph
+- techdocs
+- search
+- scaffolder
+- kubernetes
+- user-settings
+- api-docs
+
+```
+# Integration plugins
+- github-actions
+- github-pull-requests
+- azure-devops
+- jenkins
+- argocd
+- sonarqube
+- pagerduty
+- sentry
+- grafana
+- prometheus
+
+# Utility plugins
+- cost-insights
+- lighthouse
+- badges
+- todo
+- newrelic-dashboard
+
+# Security plugins
+- security-insights
+- dependabot
+- snyk
+```
+
+features:
+- software-templates
+- tech-radar
+- api-docs
+- cost-insights
+- analytics
+- search
+
+# Tech Radar configuration
+
+techRadar:
+width: 1500
+height: 900
+
+# Software templates (scaffolder templates)
+
+templates:
+
+# Template variables available globally
+
+variables:
+organization: crusoe-island
+defaultBranch: main
+baseUrl: https://github.com/crusoe-island
+cluster:
+dev: aks-idp-dev
+staging: aks-idp-staging
+prod: aks-idp-prod
+registry:
+dev: acridpdev.azurecr.io
+staging: acridpstaging.azurecr.io
+prod: acridpprod.azurecr.io
+domain: crusoe-island.com
+region: westeurope
+
+# Development/local overrides
+
+# These are only used when running locally
+
+development:
+
+# Allow guest access in development
+
+auth:
+providers:
+guest:
+dangerouslyAllowOutsideDevelopment: true
+
+# Use in-memory cache
+
+backend:
+cache:
+store: memory
+
+```
+# Use local database
+database:
+  client: better-sqlite3
+  connection: ':memory:'
+```
+
+# Disable TLS verification for local testing
+
+kubernetes:
+clusterLocatorMethods:
+- type: ‘config’
+clusters:
+- name: local
+url: https://kubernetes.docker.internal:6443
+authProvider: ‘serviceAccount’
+skipTLSVerify: true
+serviceAccountToken: ${K8S_LOCAL_TOKEN}
+
+# Logging configuration
+
+logging:
+
+# Log level for the application
+
+level: info
+
+# Log format
+
+format: json
+
+# Special log levels for specific categories
+
+categories:
+catalog: info
+scaffolder: debug
+auth: info
+kubernetes: info
+techdocs: info
+
+# Metrics and observability
+
+metrics:
+enabled: true
+
+# Export to Prometheus
+
+prometheus:
+enabled: true
+path: /metrics
+
+# Custom metrics
+
+custom:
+- name: backstage_catalog_entities_total
+help: Total number of catalog entities
+type: gauge
+- name: backstage_scaffolder_tasks_total
+help: Total number of scaffolder tasks
+type: counter
+- name: backstage_plugin_errors_total
+help: Total number of plugin errors
+type: counter
+
+# Rate limiting
+
+rateLimit:
+
+# Global rate limits
+
+global:
+max: 1000
+windowMs: 900000  # 15 minutes
+
+# API-specific rate limits
+
+api:
+catalog:
+max: 500
+windowMs: 60000  # 1 minute
+scaffolder:
+max: 100
+windowMs: 60000
+
+# Health checks
+
+health:
+readiness:
+enabled: true
+path: /healthcheck
+
+liveness:
+enabled: true
+path: /healthz
+
+# Feature flags
+
+featureFlags:
+
+# Enable new experimental features
+
+experimental:
+catalogReactQuery: false
+newBackendSystem: false
+
+# Custom feature flags
+
+custom:
+showCostInsights: true
+enableTechRadar: true
+enableTemplateValidation: true
+showSecurityInsights: true
+
+# Branding (optional customization)
+
+branding:
+theme:
+light:
+palette:
+primary:
+main: ‘#1976d2’
+secondary:
+main: ‘#dc004e’
+
+```
+  typography:
+    fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif'
+
+dark:
+  palette:
+    primary:
+      main: '#90caf9'
+    secondary:
+      main: '#f48fb1'
+  
+  typography:
+    fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif'
+```
+
+# Custom homepage configuration
+
+homepage:
+
+# Widgets to display on homepage
+
+widgets:
+- type: catalog-filter
+name: My Components
+filters:
+owner: ${user}
+kind: Component
+
+```
+- type: recently-visited
+  name: Recently Visited
+
+- type: starred-entities
+  name: Starred Items
+
+- type: announcements
+  name: Announcements
+  source: confluence
+  maxItems: 3
+
+- type: tech-radar
+  name: Tech Radar
+
+- type: cost-insights
+  name: Cost Overview
+  period: month
+```
+
+# API documentation configuration
+
+apiDocs:
+
+# API spec formats to support
+
+formats:
+- openapi3
+- openapi2
+- asyncapi2
+- graphql
+
+# Auto-discover APIs
+
+autoDiscover:
+enabled: true
+locations:
+- https://github.com/crusoe-island/*/blob/main/api-specs/*.yaml
+
+# Catalog processors
+
+catalog:
+processors:
+# GitHub discovery
+github:
+organization: crusoe-island
+
+```
+# Azure DevOps discovery
+azureDevOps:
+  organization: crusoe-island
+  
+# URL readers
+urlReader:
+  processors:
+    - github
+    - azureDevOps
+    - url
+```
+
+# Entity validation
+
+entityValidation:
+
+# Enforce validation rules
+
+enforce: true
+
+# Custom validators
+
+validators:
+- type: metadata
+rules:
+- field: metadata.name
+pattern: ‘^[a-z0-9-]+$’
+message: ‘Name must be lowercase with hyphens’
+- field: metadata.description
+minLength: 10
+message: ‘Description must be at least 10 characters’
+
+# Internationalization (i18n)
+
+i18n:
+defaultLanguage: ‘en’
+availableLanguages:
+- ‘en’
+- ‘nl’
+- ‘de’
+- ‘fr’
+
+# Security settings
+
+security:
+
+# Content Security Policy
+
+contentSecurityPolicy:
+defaultSrc: [”‘self’”]
+scriptSrc: [”‘self’”, “‘unsafe-inline’”, “‘unsafe-eval’”]
+styleSrc: [”‘self’”, “‘unsafe-inline’”]
+imgSrc: [”‘self’”, ‘data:’, ‘https:’]
+connectSrc: [”‘self’”, ‘https:’]
+
+# CORS
+
+cors:
+enabled: true
+allowedOrigins:
+- https://backstage.crusoe-island.com
+- https://*.crusoe-island.com
+
+# Session security
+
+session:
+secure: true
+httpOnly: true
+sameSite: ‘strict’
+maxAge: 28800000  # 8 hours
+
+# Backup and disaster recovery
+
+backup:
+
+# Database backup configuration
+
+database:
+enabled: true
+schedule: ‘0 2 * * *’  # Daily at 2 AM
+retention:
+days: 30
+destination: ‘azure-blob-storage’
+
+# Catalog backup
+
+catalog:
+enabled: true
+schedule: ‘0 */6 * * *’  # Every 6 hours
+retention:
+days: 7
+
+-----
+
+# Production overrides (separate file in production)
+
+# File: app-config.production.yaml
+
+# Production-specific settings would go here
+
+# This file is loaded in addition to app-config.yaml
+
+# when NODE_ENV=production
+
+# Example:
+
+# backend:
+
+# baseUrl: https://backstage.crusoe-island.com
+
+# database:
+
+# client: pg
+
+# connection:
+
+# host: prod-postgres.database.azure.com
+
+# # … other production database settings
+
+# kubernetes:
+
+# clusterLocatorMethods:
+
+# - type: ‘config’
+
+# clusters:
+
+# # Production clusters only
