@@ -16,7 +16,9 @@ secure-idp/
 │   │   └── network-architecture.md
 │   ├── security/
 │   │   ├── security-guide.md
-│   │   ├── incident-response.md
+│   │   ├── incident-response-part1.md
+│   │   ├── incident-response-part2.md
+│   │   ├── incident-response-part3.md
 │   │   └── compliance.md
 │   ├── developer-guide/
 │   │   ├── getting-started.md
